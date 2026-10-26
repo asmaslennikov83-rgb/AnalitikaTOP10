@@ -3,11 +3,12 @@ import {periods} from './core.mjs';
 import {collect} from './wb.mjs';
 import {workbook} from './excel.mjs';
 import {discoverSubjects} from './subjects.mjs';
+const version='0.3.0';
 const token=process.env.TELEGRAM_BOT_TOKEN;
 const allowed=new Set((process.env.TELEGRAM_USER_IDS||'').split(',').map(s=>s.trim()).filter(Boolean));
 if(!token||!allowed.size) throw new Error('Заполните TELEGRAM_BOT_TOKEN и TELEGRAM_USER_IDS в .env');
 const cabinets=JSON.parse(await readFile(new URL('../cabinets.json',import.meta.url),'utf8'));
-if(!cabinets.length||new Set(cabinets.map(c=>c.id)).size!==cabinets.length||cabinets.some(c=>!/^\w+$/.test(c.id)||!c.name||!/^WB_AUTHORIZEV3_\d+$/.test(c.tokenEnv)||!Array.isArray(c.subjects)||c.subjects.some(s=>!Number.isInteger(s.id)||s.id<=0||!s.name))) throw new Error('Проверьте cabinets.json');
+if(!cabinets.length||new Set(cabinets.map(c=>c.id)).size!==cabinets.length||cabinets.some(c=>!/^\w+$/.test(c.id)||!c.name||!/^WB_API_TOKEN_\d+$/.test(c.contentTokenEnv)||!Array.isArray(c.subjects)||c.subjects.some(s=>!Number.isInteger(s.id)||s.id<=0||!s.name))) throw new Error('Проверьте cabinets.json');
 async function telegram(method,body) {
   let r;try{r=await fetch(`https://api.telegram.org/bot${token}/${method}`,body instanceof FormData?{method:'POST',body,signal:AbortSignal.timeout(90000)}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(60000)});}catch{throw new Error('Нет связи с Telegram');}
   const data=await r.json();if(!data.ok) throw new Error(`Telegram отклонил ${method}`);return data.result;
@@ -17,7 +18,7 @@ let busy=false;
 async function handle(message) {
   if(message.chat.type!=='private'||!allowed.has(String(message.from?.id))) return;
   const chat=message.chat.id,text=message.text||'';
-  if(text.startsWith('/start')||text.startsWith('/help')) return send(chat,'/report — Excel с начала периода из настроек\n/report 2026-01 — с указанного месяца\n/subjects — список предметов\nЗакрытые месяцы и ежедневная динамика текущего месяца по вчера.');
+  if(text.startsWith('/start')||text.startsWith('/help')) return send(chat,'Версия сборки: 0.3.0\n/report — Excel с начала периода из настроек\n/report 2026-01 — с указанного месяца\n/subjects — список предметов\nЗакрытые месяцы и ежедневная динамика текущего месяца по вчера.');
   if(text==='/subjects') {
     if(busy) return send(chat,'Запрос уже выполняется. Дождитесь завершения.');
     busy=true;
@@ -44,8 +45,8 @@ async function handle(message) {
       try {
         const subjects=await discoverSubjects(process.env[cabinet.contentTokenEnv]);
         if(!subjects.length) throw new Error('В кабинете нет активных карточек товаров');
-        const wbToken=process.env[cabinet.tokenEnv];
-        if(!wbToken) throw new Error(`Заполните ${cabinet.tokenEnv} в .env`);
+        const wbToken=process.env[cabinet.contentTokenEnv];
+        if(!wbToken) throw new Error(`Заполните ${cabinet.contentTokenEnv} в .env`);
         await send(chat,`${cabinet.name}: найдено ${subjects.length} предметов через API. Формирую отчёт за ${plan.length} периодов.`);
         const records=await collect(subjects,plan,wbToken);
         const buffer=await workbook(records,today,cabinet.name);
@@ -64,3 +65,4 @@ while(true) {
     for(const update of updates) {offset=update.update_id+1;if(update.message) handle(update.message).catch(()=>console.error('Не удалось обработать сообщение'));}
   }catch{console.error('Ошибка связи Telegram. Повтор через 5 секунд.');await new Promise(r=>setTimeout(r,5000));}
 }
+
