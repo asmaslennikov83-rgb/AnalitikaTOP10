@@ -1,9 +1,8 @@
 import {validateResponse} from './core.mjs';
 const endpoint='https://seller-content.wildberries.ru/ns/analytics-api/content-analytics/api/v2/sales-funnel/seller/comparisons';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-export async function comparisons(subjectID,period) {
-  const token=process.env.WB_AUTHORIZEV3;
-  if(!token) throw new Error('Не заполнен WB_AUTHORIZEV3 в локальном .env');
+export async function comparisons(subjectID,period,token) {
+  if(!token) throw new Error('Не заполнен токен кабинета в локальном .env');
   for(let attempt=0;attempt<4;attempt++) {
     const response=await fetch(endpoint,{method:'POST',signal:AbortSignal.timeout(60000),headers:{'Content-Type':'application/json',Authorizev3:token},body:JSON.stringify({subjectID,skipDeletedNm:false,start:period.start,end:period.end})});
     if(response.status===401 || response.status===403) throw new Error('WB отклонил доступ. Обновите локальный Authorizev3; могут требоваться дополнительные параметры сессии.');
@@ -17,11 +16,11 @@ export async function comparisons(subjectID,period) {
     return validateResponse(body);
   }
 }
-export async function collect(subjects,periods,onProgress=()=>{}) {
+export async function collect(subjects,periods,token,onProgress=()=>{}) {
   const records=[];
   for(const subject of subjects) for(const period of periods) {
     if(records.length) await sleep(Math.max(1000,Number(process.env.WB_REQUEST_DELAY_MS)||2000));
-    const data=await comparisons(subject.id,period);
+    const data=await comparisons(subject.id,period,token);
     records.push({subject,period,data});onProgress(records.length,subjects.length*periods.length);
   }
   return records;

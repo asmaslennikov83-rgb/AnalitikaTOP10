@@ -1,11 +1,11 @@
 import ExcelJS from 'exceljs';
 import {groups,metrics,safeCell,sheetName} from './core.mjs';
-export async function workbook(records,today) {
+export async function workbook(records,today,cabinetName='') {
   const book=new ExcelJS.Workbook();book.creator='WB Telegram Bot';const used=new Set();
   for(const id of new Set(records.map(r=>r.subject.id))) {
     const items=records.filter(r=>r.subject.id===id), subject=items[0].subject;
     const ws=book.addWorksheet(sheetName(subject.name,used));
-    ws.addRow([safeCell(subject.name),'Предмет WB',id,'Сформировано',today]);
+    ws.addRow([safeCell(subject.name),'Предмет WB',id,'Сформировано',today,'Кабинет',safeCell(cabinetName)]);
     ws.addRow(['Месяцы — фактические границы запроса. Текущий месяц по вчера. Дневные строки — отдельные запросы.']);
     ws.addRow(['Суммы продавцов из списков приблизительные. Выкуп и конверсии сохранены как вернул WB.']);
     ws.addRow(['Названия не являются идентификаторами продавцов. Состав лидеров меняется между периодами.']);

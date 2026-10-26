@@ -5,8 +5,8 @@ import {workbook} from './excel.mjs';
 const token=process.env.TELEGRAM_BOT_TOKEN;
 const allowed=new Set((process.env.TELEGRAM_USER_IDS||'').split(',').map(s=>s.trim()).filter(Boolean));
 if(!token||!allowed.size) throw new Error('Заполните TELEGRAM_BOT_TOKEN и TELEGRAM_USER_IDS в .env');
-const subjects=JSON.parse(await readFile(new URL('../subjects.json',import.meta.url),'utf8'));
-if(!subjects.length||subjects.some(s=>!Number.isInteger(s.id)||s.id<=0||!s.name)) throw new Error('Проверьте subjects.json');
+const cabinets=JSON.parse(await readFile(new URL('../cabinets.json',import.meta.url),'utf8'));
+if(!cabinets.length||new Set(cabinets.map(c=>c.id)).size!==cabinets.length||cabinets.some(c=>!/^\w+$/.test(c.id)||!c.name||!/^WB_AUTHORIZEV3_\d+$/.test(c.tokenEnv)||!Array.isArray(c.subjects)||c.subjects.some(s=>!Number.isInteger(s.id)||s.id<=0||!s.name))) throw new Error('Проверьте cabinets.json');
 async function telegram(method,body) {
   let r;try{r=await fetch(`https://api.telegram.org/bot${token}/${method}`,body instanceof FormData?{method:'POST',body,signal:AbortSignal.timeout(90000)}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(60000)});}catch{throw new Error('Нет связи с Telegram');}
   const data=await r.json();if(!data.ok) throw new Error(`Telegram отклонил ${method}`);return data.result;
@@ -17,7 +17,7 @@ async function handle(message) {
   if(message.chat.type!=='private'||!allowed.has(String(message.from?.id))) return;
   const chat=message.chat.id,text=message.text||'';
   if(text.startsWith('/start')||text.startsWith('/help')) return send(chat,'/report — Excel с начала периода из настроек\n/report 2026-01 — с указанного месяца\n/subjects — список предметов\nЗакрытые месяцы и ежедневная динамика текущего месяца по вчера.');
-  if(text==='/subjects') return send(chat,subjects.map(s=>`${s.id}: ${s.name}`).join('\n'));
+  if(text==='/subjects') return send(chat,cabinets.map(c=>`${c.name}:\n${c.subjects.map(s=>`${s.id}: ${s.name}`).join('\n')||'Предметы не настроены'}`).join('\n\n'));
   if(!/^\/report(?:\s|$)/.test(text)) return;
   if(busy) return send(chat,'Отчёт уже формируется. Дождитесь завершения.');
   busy=true;
@@ -29,12 +29,19 @@ async function handle(message) {
     const plan=periods(start,today);
     if(!plan.length) throw new Error('За выбранный период ещё нет завершённых дней');
     if(plan.filter(p=>p.kind==='month').length>24) throw new Error('Выберите период не более 24 месяцев');
-    await send(chat,`Формирую отчёт: ${subjects.length} предметов, ${plan.length} периодов. Это может занять несколько минут.`);
-    const records=await collect(subjects,plan);
-    const buffer=await workbook(records,today);
-    if(buffer.length>49*1024*1024) throw new Error('Файл слишком большой. Уменьшите период.');
-    const form=new FormData();form.set('chat_id',String(chat));form.set('document',new Blob([buffer]),`WB-${today}.xlsx`);
-    await telegram('sendDocument',form);
+    for(const cabinet of cabinets) {
+      try {
+        if(!cabinet.subjects.length) throw new Error('Добавьте предметы кабинета в cabinets.json');
+        const wbToken=process.env[cabinet.tokenEnv];
+        if(!wbToken) throw new Error(`Заполните ${cabinet.tokenEnv} в .env`);
+        await send(chat,`${cabinet.name}: формирую отчёт по ${cabinet.subjects.length} предметам за ${plan.length} периодов.`);
+        const records=await collect(cabinet.subjects,plan,wbToken);
+        const buffer=await workbook(records,today,cabinet.name);
+        if(buffer.length>49*1024*1024) throw new Error('Файл слишком большой. Уменьшите период.');
+        const form=new FormData();form.set('chat_id',String(chat));form.set('caption',cabinet.name);form.set('document',new Blob([buffer]),`WB-${cabinet.id}-${today}.xlsx`);
+        await telegram('sendDocument',form);
+      } catch(error) {await send(chat,`${cabinet.name}: отчёт не сформирован. ${error.message}`);}
+    }
   } catch(error) {await send(chat,`Не удалось сформировать полный отчёт: ${error.message}`);} finally {busy=false;}
 }
 let offset=0;
