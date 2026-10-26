@@ -1,4 +1,4 @@
 [
-  {"id":"cabinet1","name":"Кабинет 1","tokenEnv":"WB_AUTHORIZEV3_1","subjects":[{"id":940,"name":"Фильтры-кувшины для воды"}]},
-  {"id":"cabinet2","name":"Кабинет 2","tokenEnv":"WB_AUTHORIZEV3_2","subjects":[]}
+  {"id":"cabinet1","name":"Кабинет 1","tokenEnv":"WB_AUTHORIZEV3_1","contentTokenEnv":"WB_API_TOKEN_1","subjects":[]},
+  {"id":"cabinet2","name":"Кабинет 2","tokenEnv":"WB_AUTHORIZEV3_2","contentTokenEnv":"WB_API_TOKEN_2","subjects":[]}
 ]
