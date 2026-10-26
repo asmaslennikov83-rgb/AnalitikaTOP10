@@ -3,7 +3,8 @@ import {periods} from './core.mjs';
 import {collect} from './wb.mjs';
 import {workbook} from './excel.mjs';
 import {discoverSubjects} from './subjects.mjs';
-const version='0.3.0';
+import {diagnose} from './diagnostics.mjs';
+const version='0.3.1';
 const token=process.env.TELEGRAM_BOT_TOKEN;
 const allowed=new Set((process.env.TELEGRAM_USER_IDS||'').split(',').map(s=>s.trim()).filter(Boolean));
 if(!token||!allowed.size) throw new Error('Заполните TELEGRAM_BOT_TOKEN и TELEGRAM_USER_IDS в .env');
@@ -18,7 +19,22 @@ let busy=false;
 async function handle(message) {
   if(message.chat.type!=='private'||!allowed.has(String(message.from?.id))) return;
   const chat=message.chat.id,text=message.text||'';
-  if(text.startsWith('/start')||text.startsWith('/help')) return send(chat,'Версия сборки: 0.3.0\n/report — Excel с начала периода из настроек\n/report 2026-01 — с указанного месяца\n/subjects — список предметов\nЗакрытые месяцы и ежедневная динамика текущего месяца по вчера.');
+  if(text.startsWith('/start')||text.startsWith('/help')) return send(chat,`Версия сборки: ${version}\n/check — проверить доступ WB к сравнению и собственной воронке\n/subjects — получить предметы через API\n/report — пока недоступен: проверяем источник данных`);
+  if(text==='/check') {
+    if(busy)return send(chat,'Запрос уже выполняется. Дождитесь завершения.');
+    busy=true;
+    try {
+      await send(chat,'Проверяю доступ отдельно для каждого кабинета. Токены не выводятся.');
+      const d=new Date();d.setTime(d.getTime()-86400000);
+      const date=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(d);
+      for(const cabinet of cabinets) {
+        try {const key=process.env[cabinet.contentTokenEnv];const subjects=await discoverSubjects(key);
+          if(!subjects.length){await send(chat,`${cabinet.name}: нет активных карточек для проверки`);continue;}
+          await send(chat,`${cabinet.name}, предмет ${subjects[0].id}, ${date}:\n${await diagnose(key,subjects[0].id,date)}`);
+        }catch{await send(chat,`${cabinet.name}: не удалось получить предмет для проверки. Проверьте /subjects.`);}
+      }
+    }finally{busy=false;}return;
+  }
   if(text==='/subjects') {
     if(busy) return send(chat,'Запрос уже выполняется. Дождитесь завершения.');
     busy=true;
@@ -31,31 +47,7 @@ async function handle(message) {
     }}finally{busy=false;}return;
   }
   if(!/^\/report(?:\s|$)/.test(text)) return;
-  if(busy) return send(chat,'Отчёт уже формируется. Дождитесь завершения.');
-  busy=true;
-  try {
-    const arg=text.trim().split(/\s+/)[1];
-    if(arg&&!/^\d{4}-(0[1-9]|1[0-2])$/.test(arg)) throw new Error('Укажите месяц: /report 2026-01');
-    const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
-    const start=arg?arg+'-01':process.env.REPORT_START||today.slice(0,7)+'-01';
-    const plan=periods(start,today);
-    if(!plan.length) throw new Error('За выбранный период ещё нет завершённых дней');
-    if(plan.filter(p=>p.kind==='month').length>24) throw new Error('Выберите период не более 24 месяцев');
-    for(const cabinet of cabinets) {
-      try {
-        const subjects=await discoverSubjects(process.env[cabinet.contentTokenEnv]);
-        if(!subjects.length) throw new Error('В кабинете нет активных карточек товаров');
-        const wbToken=process.env[cabinet.contentTokenEnv];
-        if(!wbToken) throw new Error(`Заполните ${cabinet.contentTokenEnv} в .env`);
-        await send(chat,`${cabinet.name}: найдено ${subjects.length} предметов через API. Формирую отчёт за ${plan.length} периодов.`);
-        const records=await collect(subjects,plan,wbToken);
-        const buffer=await workbook(records,today,cabinet.name);
-        if(buffer.length>49*1024*1024) throw new Error('Файл слишком большой. Уменьшите период.');
-        const form=new FormData();form.set('chat_id',String(chat));form.set('caption',cabinet.name);form.set('document',new Blob([buffer]),`WB-${cabinet.id}-${today}.xlsx`);
-        await telegram('sendDocument',form);
-      } catch(error) {await send(chat,`${cabinet.name}: отчёт не сформирован. ${error.message}`);}
-    }
-  } catch(error) {await send(chat,`Не удалось сформировать полный отчёт: ${error.message}`);} finally {busy=false;}
+  return send(chat,'В этой диагностической сборке отчёт ещё не подключён. Выполните /check для проверки API WB.');
 }
 let offset=0;
 console.log('Бот запущен. Доступ ограничен указанными Telegram ID.');
@@ -65,4 +57,5 @@ while(true) {
     for(const update of updates) {offset=update.update_id+1;if(update.message) handle(update.message).catch(()=>console.error('Не удалось обработать сообщение'));}
   }catch{console.error('Ошибка связи Telegram. Повтор через 5 секунд.');await new Promise(r=>setTimeout(r,5000));}
 }
+
 
