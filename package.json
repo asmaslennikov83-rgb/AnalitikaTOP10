@@ -1,1 +1,2 @@
-{"name":"wb-funnel-telegram-bot","version":"0.2.1","private":true,"type":"module","main":"index.js","scripts":{"start":"node index.js","test":"node --test"},"dependencies":{"exceljs":"4.4.0"},"engines":{"node":">=22"}}
+{"name":"wb-funnel-telegram-bot","version":"0.3.0","private":true,"type":"module","main":"index.js","scripts":{"start":"node index.js","test":"node --test"},"dependencies":{"exceljs":"4.4.0"},"engines":{"node":">=22"}}
+
