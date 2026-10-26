@@ -1,0 +1,47 @@
+import {readFile} from 'node:fs/promises';
+import {periods} from './core.mjs';
+import {collect} from './wb.mjs';
+import {workbook} from './excel.mjs';
+const token=process.env.TELEGRAM_BOT_TOKEN;
+const allowed=new Set((process.env.TELEGRAM_USER_IDS||'').split(',').map(s=>s.trim()).filter(Boolean));
+if(!token||!allowed.size) throw new Error('Заполните TELEGRAM_BOT_TOKEN и TELEGRAM_USER_IDS в .env');
+const subjects=JSON.parse(await readFile(new URL('../subjects.json',import.meta.url),'utf8'));
+if(!subjects.length||subjects.some(s=>!Number.isInteger(s.id)||s.id<=0||!s.name)) throw new Error('Проверьте subjects.json');
+async function telegram(method,body) {
+  let r;try{r=await fetch(`https://api.telegram.org/bot${token}/${method}`,body instanceof FormData?{method:'POST',body,signal:AbortSignal.timeout(90000)}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(60000)});}catch{throw new Error('Нет связи с Telegram');}
+  const data=await r.json();if(!data.ok) throw new Error(`Telegram отклонил ${method}`);return data.result;
+}
+const send=(chat_id,text)=>telegram('sendMessage',{chat_id,text});
+let busy=false;
+async function handle(message) {
+  if(message.chat.type!=='private'||!allowed.has(String(message.from?.id))) return;
+  const chat=message.chat.id,text=message.text||'';
+  if(text.startsWith('/start')||text.startsWith('/help')) return send(chat,'/report — Excel с начала периода из настроек\n/report 2026-01 — с указанного месяца\n/subjects — список предметов\nЗакрытые месяцы и ежедневная динамика текущего месяца по вчера.');
+  if(text==='/subjects') return send(chat,subjects.map(s=>`${s.id}: ${s.name}`).join('\n'));
+  if(!/^\/report(?:\s|$)/.test(text)) return;
+  if(busy) return send(chat,'Отчёт уже формируется. Дождитесь завершения.');
+  busy=true;
+  try {
+    const arg=text.trim().split(/\s+/)[1];
+    if(arg&&!/^\d{4}-(0[1-9]|1[0-2])$/.test(arg)) throw new Error('Укажите месяц: /report 2026-01');
+    const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    const start=arg?arg+'-01':process.env.REPORT_START||today.slice(0,7)+'-01';
+    const plan=periods(start,today);
+    if(!plan.length) throw new Error('За выбранный период ещё нет завершённых дней');
+    if(plan.filter(p=>p.kind==='month').length>24) throw new Error('Выберите период не более 24 месяцев');
+    await send(chat,`Формирую отчёт: ${subjects.length} предметов, ${plan.length} периодов. Это может занять несколько минут.`);
+    const records=await collect(subjects,plan);
+    const buffer=await workbook(records,today);
+    if(buffer.length>49*1024*1024) throw new Error('Файл слишком большой. Уменьшите период.');
+    const form=new FormData();form.set('chat_id',String(chat));form.set('document',new Blob([buffer]),`WB-${today}.xlsx`);
+    await telegram('sendDocument',form);
+  } catch(error) {await send(chat,`Не удалось сформировать полный отчёт: ${error.message}`);} finally {busy=false;}
+}
+let offset=0;
+console.log('Бот запущен. Доступ ограничен указанными Telegram ID.');
+while(true) {
+  try {
+    const updates=await telegram('getUpdates',{offset,timeout:30,allowed_updates:['message']});
+    for(const update of updates) {offset=update.update_id+1;if(update.message) handle(update.message).catch(()=>console.error('Не удалось обработать сообщение'));}
+  }catch{console.error('Ошибка связи Telegram. Повтор через 5 секунд.');await new Promise(r=>setTimeout(r,5000));}
+}
