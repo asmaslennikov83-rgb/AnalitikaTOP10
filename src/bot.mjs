@@ -2,6 +2,7 @@ import {readFile} from 'node:fs/promises';
 import {periods} from './core.mjs';
 import {collect} from './wb.mjs';
 import {workbook} from './excel.mjs';
+import {discoverSubjects} from './subjects.mjs';
 const token=process.env.TELEGRAM_BOT_TOKEN;
 const allowed=new Set((process.env.TELEGRAM_USER_IDS||'').split(',').map(s=>s.trim()).filter(Boolean));
 if(!token||!allowed.size) throw new Error('Заполните TELEGRAM_BOT_TOKEN и TELEGRAM_USER_IDS в .env');
@@ -17,7 +18,17 @@ async function handle(message) {
   if(message.chat.type!=='private'||!allowed.has(String(message.from?.id))) return;
   const chat=message.chat.id,text=message.text||'';
   if(text.startsWith('/start')||text.startsWith('/help')) return send(chat,'/report — Excel с начала периода из настроек\n/report 2026-01 — с указанного месяца\n/subjects — список предметов\nЗакрытые месяцы и ежедневная динамика текущего месяца по вчера.');
-  if(text==='/subjects') return send(chat,cabinets.map(c=>`${c.name}:\n${c.subjects.map(s=>`${s.id}: ${s.name}`).join('\n')||'Предметы не настроены'}`).join('\n\n'));
+  if(text==='/subjects') {
+    if(busy) return send(chat,'Запрос уже выполняется. Дождитесь завершения.');
+    busy=true;
+    try {for(const cabinet of cabinets) {
+      try {const subjects=await discoverSubjects(process.env[cabinet.contentTokenEnv]);
+        const lines=[`${cabinet.name}:`,...subjects.map(s=>`${s.id}: ${s.name}`)];
+        if(!subjects.length) lines.push('В кабинете нет активных карточек');
+        let chunk='';for(const line of lines) {if(chunk.length+line.length>3500){await send(chat,chunk);chunk='';}chunk+=line+'\n';}if(chunk)await send(chat,chunk);
+      }catch(error){await send(chat,`${cabinet.name}: ${error.message}`);}
+    }}finally{busy=false;}return;
+  }
   if(!/^\/report(?:\s|$)/.test(text)) return;
   if(busy) return send(chat,'Отчёт уже формируется. Дождитесь завершения.');
   busy=true;
@@ -31,11 +42,12 @@ async function handle(message) {
     if(plan.filter(p=>p.kind==='month').length>24) throw new Error('Выберите период не более 24 месяцев');
     for(const cabinet of cabinets) {
       try {
-        if(!cabinet.subjects.length) throw new Error('Добавьте предметы кабинета в cabinets.json');
+        const subjects=await discoverSubjects(process.env[cabinet.contentTokenEnv]);
+        if(!subjects.length) throw new Error('В кабинете нет активных карточек товаров');
         const wbToken=process.env[cabinet.tokenEnv];
         if(!wbToken) throw new Error(`Заполните ${cabinet.tokenEnv} в .env`);
-        await send(chat,`${cabinet.name}: формирую отчёт по ${cabinet.subjects.length} предметам за ${plan.length} периодов.`);
-        const records=await collect(cabinet.subjects,plan,wbToken);
+        await send(chat,`${cabinet.name}: найдено ${subjects.length} предметов через API. Формирую отчёт за ${plan.length} периодов.`);
+        const records=await collect(subjects,plan,wbToken);
         const buffer=await workbook(records,today,cabinet.name);
         if(buffer.length>49*1024*1024) throw new Error('Файл слишком большой. Уменьшите период.');
         const form=new FormData();form.set('chat_id',String(chat));form.set('caption',cabinet.name);form.set('document',new Blob([buffer]),`WB-${cabinet.id}-${today}.xlsx`);
